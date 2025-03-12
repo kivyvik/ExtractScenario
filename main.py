@@ -1,3 +1,4 @@
+import math
 import os
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
@@ -48,6 +49,9 @@ def load_data() -> DataBundle:
     dfs_mobileye = pd.read_excel(mobileye, sheet_name=None)
     return DataBundle(df_car=df_car, df_radar=df_radar, dfs_mobileye=dfs_mobileye)
 
+def euclidean_distance(start: Tuple[float, float], end: Tuple[float, float]) -> float:
+    return math.sqrt((end[0] - start[0]) ** 2 + (end[1] - start[1]) ** 2)
+
 def extract_lane_boundaries(ego_traj: EgoTrajectory, df: pd.DataFrame):
     """
     extract left and right lane boundaries of the lane on which Ego is running
@@ -57,7 +61,10 @@ def extract_lane_boundaries(ego_traj: EgoTrajectory, df: pd.DataFrame):
     """
     left = []
     right = []
-    for i in range(len(ego_traj.positions) - 1):
+    frames = []
+    # note: len(start_frames) = len(positions) + 1
+    assert len(ego_traj.start_frames) == len(ego_traj.positions) + 1
+    for i in range(len(ego_traj.positions)):
         frame_id_start = ego_traj.start_frames[i]
         frame_id_end = ego_traj.start_frames[i+1]
         theta = ego_traj.headings[i]
@@ -70,7 +77,6 @@ def extract_lane_boundaries(ego_traj: EgoTrajectory, df: pd.DataFrame):
             frame_id += 1
         if frame_id == frame_id_end:
             raise ValueError(f'Cannot find given FrameID: {frame_id_start}->{frame_id_end}')
-
         position = ego_traj.positions[i]
         for _, row in rows.iterrows():
             distance = abs(row['C0'])
@@ -83,11 +89,41 @@ def extract_lane_boundaries(ego_traj: EgoTrajectory, df: pd.DataFrame):
             elif row['Direction'].lower() == 'right':
                 right.append((position[0] - dx, position[1] - dy))
             else:
-                raise ValueError
+                raise ValueError(f"FrameID={frame_id}, field 'Direction' is invalid")
+        frames.append(frame_id)
+    assert len(left) == len(right)  == len(ego_traj.positions)
+    left_interp = []
+    right_interp = []
+    for i in range(len(left) - 1):
+        frame_id = frames[i]
+        rows = df.loc[df['FrameID'] == frame_id]
+        start = ego_traj.positions[i]
+        end = ego_traj.positions[i+1]
+        theta = ego_traj.headings[i]
+        for _, row in rows.iterrows():
+            C0 = row['C0']
+            C1 = row['C1']
+            C2 = row['C2']
+            C3 = row['C3']
+            distance = euclidean_distance(start, end)
+            Zs = np.linspace(0.0, distance, 5) # physical longitudinal distance from camera
+            for z in Zs:
+                new_position = start[0] + z * np.cos(theta), start[1] + z * np.sin(theta)
+                X = C3 * z ** 3 + C2 * z ** 2 + C1 * z + C0 # physical lateral distance from camera
+                X = abs(X)
+                # Compute perpendicular offsets
+                dx = X * np.cos(theta + np.pi / 2)  # +90° for left
+                dy = X * np.sin(theta + np.pi / 2)
+                if row['Direction'].lower() == 'left':
+                    left_interp.append((new_position[0] + dx, new_position[1] + dy))
+                elif row['Direction'].lower() == 'right':
+                    right_interp.append((new_position[0] - dx, new_position[1] - dy))
+    # handle last point
+    if len(left) > 0:
+        left_interp.append(left[-1])
+        right_interp.append(right[-1])
 
-
-    assert len(left) == len(right) # == len(ego_traj.positions)
-    return left, right
+    return left_interp, right_interp
 
 
 def extract_ego_trajectory(df: pd.DataFrame) -> EgoTrajectory:
@@ -107,6 +143,9 @@ def extract_ego_trajectory(df: pd.DataFrame) -> EgoTrajectory:
     for index, row in filtered.iterrows():
         x, y = transformer.transform(row['Longitude'], row['Latitude'])
         ego_traj.add_point(row['relative_time'], x, y, row['Vehicle Speed(km/h)'], frame_id=row['FrameID'])
+
+    last_frame_id = df.iloc[-1]['FrameID']
+    ego_traj.start_frames.append(last_frame_id + 1)
 
     ego_traj.compute_heading()
     ego_traj.shift_to_origin()
