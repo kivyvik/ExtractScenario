@@ -2,12 +2,14 @@ import os
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
+import numpy as np
 import pandas as pd
 from pyproj import Transformer
 import plotly.graph_objects as go
 
 from Lane import Lane
 from EgoTrajectory import EgoTrajectory
+from LaneBoundary import LaneBoundary
 
 
 @dataclass
@@ -46,6 +48,47 @@ def load_data() -> DataBundle:
     dfs_mobileye = pd.read_excel(mobileye, sheet_name=None)
     return DataBundle(df_car=df_car, df_radar=df_radar, dfs_mobileye=dfs_mobileye)
 
+def extract_lane_boundaries(ego_traj: EgoTrajectory, df: pd.DataFrame):
+    """
+    extract left and right lane boundaries of the lane on which Ego is running
+    :param ego_traj: EgoTrajectory
+    :param df: df_lka, 'LKA' (Lane Keeping Assistant) sheet in '_mobileye.xlsx'
+    :return:
+    """
+    left = []
+    right = []
+    for i in range(len(ego_traj.positions) - 1):
+        frame_id_start = ego_traj.start_frames[i]
+        frame_id_end = ego_traj.start_frames[i+1]
+        theta = ego_traj.headings[i]
+        rows = pd.DataFrame() # type: pd.DataFrame
+        frame_id = frame_id_start
+        while frame_id < frame_id_end:
+            rows = df.loc[df['FrameID'] == frame_id]
+            if len(rows) == 2:
+                break
+            frame_id += 1
+        if frame_id == frame_id_end:
+            raise ValueError(f'Cannot find given FrameID: {frame_id_start}->{frame_id_end}')
+
+        position = ego_traj.positions[i]
+        for _, row in rows.iterrows():
+            distance = abs(row['C0'])
+            # Compute perpendicular offsets
+            dx = distance * np.cos(theta + np.pi / 2)  # +90° for left
+            dy = distance * np.sin(theta + np.pi / 2)
+            # print(distance, dx, dy)
+            if row['Direction'].lower() == 'left':
+                left.append((position[0] + dx, position[1] + dy))
+            elif row['Direction'].lower() == 'right':
+                right.append((position[0] - dx, position[1] - dy))
+            else:
+                raise ValueError
+
+
+    assert len(left) == len(right) # == len(ego_traj.positions)
+    return left, right
+
 
 def extract_ego_trajectory(df: pd.DataFrame) -> EgoTrajectory:
     """
@@ -61,9 +104,12 @@ def extract_ego_trajectory(df: pd.DataFrame) -> EgoTrajectory:
 
     transformer = Transformer.from_crs("EPSG:4326", "EPSG:32632", always_xy=True)
     filtered = df.drop_duplicates(subset=['Longitude', 'Latitude'])
-    for index, row in df.iterrows():
-        x, y = transformer.transform(df['Longitude'], df['Latitude'])
-        ego_traj.add_point(df['relative_time'], x, y, df['Vehicle Speed(km/h)'], frame_id=df['FrameID'])
+    for index, row in filtered.iterrows():
+        x, y = transformer.transform(row['Longitude'], row['Latitude'])
+        ego_traj.add_point(row['relative_time'], x, y, row['Vehicle Speed(km/h)'], frame_id=row['FrameID'])
+
+    ego_traj.compute_heading()
+    ego_traj.shift_to_origin()
 
     return ego_traj
 
@@ -96,12 +142,14 @@ def process_gps_time(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def visualize(trajectory: List[Tuple[int, int]]):
+def add_trace(fig: go.Figure, trajectory: List[Tuple[int, int]], name):
     """
     使用 Plotly 可视化车辆轨迹
+    :param name: name for the trace
+    :param fig: go.Figure
     :param trajectory: List of (x,y) co-ordinates
     """
-    fig = go.Figure()
+
 
     # 1) 绘制车辆轨迹
     x_vals = [pt[0] for pt in trajectory]
@@ -110,22 +158,29 @@ def visualize(trajectory: List[Tuple[int, int]]):
         x=x_vals,
         y=y_vals,
         mode='lines+markers',
-        name='Car Trajectory',
+        name=name,
         line=dict(color='black'),
         marker=dict(size=4, color='red')
     ))
 
-    fig.show()
-
 
 def main():
     data_bundle = load_data()
-    print(data_bundle.df_car.columns)
-    print(data_bundle.df_radar.columns)
-    print(data_bundle.dfs_mobileye.keys())
+    # print(data_bundle.df_car.columns)
+    # print(data_bundle.df_radar.columns)
+    # print(data_bundle.dfs_mobileye.keys())
 
     ego_traj = extract_ego_trajectory(data_bundle.df_car)
-    visualize(ego_traj.positions)
+    df_lka = data_bundle.dfs_mobileye['LKA']
+    left, right = extract_lane_boundaries(ego_traj, df_lka)
+    print(left[:5])
+    print(right[:5])
+
+    fig = go.Figure()
+    add_trace(fig, ego_traj.positions, name='ego')
+    add_trace(fig, left, name='left')
+    add_trace(fig, right, name='right')
+    fig.show()
 
 
 if __name__ == '__main__':
