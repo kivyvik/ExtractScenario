@@ -5,8 +5,11 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
+from matplotlib import pyplot as plt
 from pyproj import Transformer
 import plotly.graph_objects as go
+from scipy.interpolate import splprep, splev
+from sklearn.cluster import KMeans
 
 from Lane import Lane
 from EgoTrajectory import EgoTrajectory
@@ -39,10 +42,10 @@ def load_data() -> DataBundle:
     ['Standard', 'Obstacle', 'TSR', 'Lane', 'LKA', 'Next Lane']
     其中 'Next Lane' 有可能为 'NL'
     """
-    data_path = r'.\data'
-    car = os.path.join(data_path, r'2019-04-15-10-36-22_camera#01.xlsx')
-    radar = os.path.join(data_path, r'2019-04-15-10-36-22_camera#01_radar.xlsx')
-    mobileye = os.path.join(data_path, r'2019-04-15-10-36-22_camera#01_mobileye.xlsx')
+    data_path = r'.\data\2019-04-15-10-36-22_camera#01' # 跟车
+    car = data_path + r'.xlsx'
+    radar = data_path + r'_radar.xlsx'
+    mobileye = data_path+  r'_mobileye.xlsx'
 
     df_car = pd.read_excel(car, sheet_name='Car')
     df_radar = pd.read_excel(radar, sheet_name='Radar')
@@ -56,7 +59,7 @@ def extract_lane_boundaries(ego_traj: EgoTrajectory, df: pd.DataFrame):
     """
     extract left and right lane boundaries of the lane on which Ego is running
     :param ego_traj: EgoTrajectory
-    :param df: df_lka, 'LKA' (Lane Keeping Assistant) sheet in '_mobileye.xlsx'
+    :param df: df_lka (or df_nl), 'LKA' (Lane Keeping Assistant) sheet in '_mobileye.xlsx'
     :return:
     """
     left = []
@@ -107,7 +110,7 @@ def extract_lane_boundaries(ego_traj: EgoTrajectory, df: pd.DataFrame):
             C2 = row['C2']
             C3 = row['C3']
             distance = euclidean_distance(start, end)
-            Zs = np.linspace(0.0, distance, 5) # physical longitudinal distance from camera
+            Zs = np.linspace(0.0, distance, 5, endpoint=False) # physical longitudinal distance from camera
             for z in Zs:
                 new_position = start[0] + z * np.cos(theta), start[1] + z * np.sin(theta)
                 X = C3 * z ** 3 + C2 * z ** 2 + C1 * z + C0 # physical lateral distance from camera
@@ -212,9 +215,21 @@ def main():
 
     ego_traj = extract_ego_trajectory(data_bundle.df_car)
     df_lka = data_bundle.dfs_mobileye['LKA']
-    left, right = extract_lane_boundaries(ego_traj, df_lka)
+    left0, right0 = extract_lane_boundaries(ego_traj, df_lka)
+
+    df_nl = None
+    try:
+        df_nl = data_bundle.dfs_mobileye['NL']
+    except KeyError:
+        df_nl = data_bundle.dfs_mobileye['Next Lane']
+    if df_nl is None:
+        raise ValueError('cannot find sheet "NL" or "Next Lane" in mobileye.xlsx')
+    left, right = extract_lane_boundaries(ego_traj, df_nl)
+    points = np.vstack((left0, right0, left, right))
 
     fig = go.Figure()
+    add_trace(fig, left0, name='left0')
+    add_trace(fig, right0, name='right0')
     add_trace(fig, ego_traj.positions, name='ego')
     add_trace(fig, left, name='left')
     add_trace(fig, right, name='right')
