@@ -151,8 +151,9 @@ def extract_ego_trajectory(df: pd.DataFrame) -> EgoTrajectory:
     last_frame_id = df.iloc[-1]['FrameID']
     ego_traj.start_frames.append(last_frame_id + 1)
 
-    ego_traj.compute_heading()
     ego_traj.shift_to_origin()
+    ego_traj.rotate_trajectory()
+    ego_traj.compute_heading()
 
     return ego_traj
 
