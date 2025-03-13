@@ -37,7 +37,35 @@ class EgoTrajectory:
             self.headings.append(self.headings[-1])
 
     def rotate_trajectory(self):
-        pass
+        """
+        Rotates the trajectory to align with the x-axis.
+        """
+        if not self.positions:
+            return
+
+        # Compute the average heading
+        avg_heading = np.arctan2(
+            self.positions[-1][1] - self.positions[0][1],
+            self.positions[-1][0] - self.positions[0][0]
+        )
+
+        # Compute rotation matrix
+        cos_theta = np.cos(-avg_heading)
+        sin_theta = np.sin(-avg_heading)
+
+        def rotate_point(x, y):
+            """ Rotate a point around the origin """
+            return (
+                x * cos_theta - y * sin_theta,
+                x * sin_theta + y * cos_theta
+            )
+
+        # Rotate all positions
+        self.positions = [rotate_point(x, y) for x, y in self.positions]
+
+        # Adjust headings
+        if self.headings:
+            self.headings = [(h - avg_heading) % (2 * np.pi) for h in self.headings]
 
     def add_point(self, timestamp, x, y, speed, frame_id=-1, acceleration=None):
         """
