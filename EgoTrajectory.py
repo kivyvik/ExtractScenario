@@ -36,6 +36,9 @@ class EgoTrajectory:
         if len(self.headings) > 0:
             self.headings.append(self.headings[-1])
 
+    def rotate_trajectory(self):
+        pass
+
     def add_point(self, timestamp, x, y, speed, frame_id=-1, acceleration=None):
         """
         Add a trajectory point.
