@@ -97,6 +97,7 @@ def extract_lane_boundaries(ego_traj: EgoTrajectory, df: pd.DataFrame):
     for i in range(len(left) - 1):
         frame_id = frames[i]
         rows = df.loc[df['FrameID'] == frame_id]
+        rows = rows.fillna(0)
         start = ego_traj.positions[i]
         end = ego_traj.positions[i+1]
         theta = ego_traj.headings[i]
@@ -212,8 +213,6 @@ def main():
     ego_traj = extract_ego_trajectory(data_bundle.df_car)
     df_lka = data_bundle.dfs_mobileye['LKA']
     left, right = extract_lane_boundaries(ego_traj, df_lka)
-    print(left[:5])
-    print(right[:5])
 
     fig = go.Figure()
     add_trace(fig, ego_traj.positions, name='ego')
