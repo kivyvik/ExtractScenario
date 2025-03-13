@@ -1,3 +1,4 @@
+import bisect
 from typing import Tuple, List
 
 import numpy as np
@@ -84,50 +85,29 @@ class EgoTrajectory:
         self.speeds.append(speed)
         # self.accelerations.append(acceleration if acceleration is not None else 0.0)
 
-    def get_latest(self):
-        """Retrieve the most recent trajectory point."""
-        if not self.timestamps:
-            return None
-        return {
-            "timestamp": self.timestamps[-1],
-            "position": self.positions[-1],
-            "speed": self.speeds[-1],
-            "orientation": self.headings[-1],
-            "acceleration": self.accelerations[-1]
-        }
-
     def interpolate(self, target_time):
         """
         Interpolate the trajectory to estimate the state at a given timestamp.
 
         :param target_time: The target time to interpolate.
-        :return: Interpolated (x, y, speed, orientation, acceleration) or None if out of bounds.
+        :return: Interpolated (x, y, speed, orientation) or None if out of bounds.
         """
-        if not self.timestamps or target_time < self.timestamps[0] or target_time > self.timestamps[-1]:
+        if target_time < self.timestamps[0] or target_time > self.timestamps[-1]:
             return None
 
-        for i in range(len(self.timestamps) - 1):
-            t1, t2 = self.timestamps[i], self.timestamps[i + 1]
-            if t1 <= target_time <= t2:
-                ratio = (target_time - t1) / (t2 - t1)
-                x = self.positions[i][0] + ratio * (self.positions[i + 1][0] - self.positions[i][0])
-                y = self.positions[i][1] + ratio * (self.positions[i + 1][1] - self.positions[i][1])
-                speed = self.speeds[i] + ratio * (self.speeds[i + 1] - self.speeds[i])
-                orientation = self.headings[i] + ratio * (self.headings[i + 1] - self.headings[i])
-                acceleration = self.accelerations[i] + ratio * (self.accelerations[i + 1] - self.accelerations[i])
-                return x, y, speed, orientation, acceleration
+        # Find the indices such that timestamps[i] <= target_time <= timestamps[i+1]
+        idx = np.searchsorted(self.timestamps, target_time) - 1
+        if idx < 0:
+            idx = 0
 
-        return None
+        t0, t1 = self.timestamps[idx], self.timestamps[idx + 1]
+        factor = (target_time - t0) / (t1 - t0)
 
-    def to_dict(self):
-        """Convert trajectory to a dictionary format."""
-        return {
-            "timestamps": self.timestamps,
-            "positions": self.positions,
-            "speeds": self.speeds,
-            "orientations": self.headings,
-            "accelerations": self.accelerations
-        }
+        x = self.positions[idx][0] + factor * (self.positions[idx + 1][ 0] - self.positions[idx][ 0])
+        y = self.positions[idx][ 1] + factor * (self.positions[idx + 1][ 1] - self.positions[idx][ 1])
+        speed = self.speeds[idx] + factor * (self.speeds[idx + 1] - self.speeds[idx])
+        heading = self.headings[idx] + factor * (self.headings[idx + 1] - self.headings[idx])
+        return x, y, speed, heading
 
     def __repr__(self):
         return f"EgoTrajectory(points={len(self.timestamps)})"

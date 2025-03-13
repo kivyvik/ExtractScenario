@@ -1,19 +1,13 @@
 import math
-import os
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
-from matplotlib import pyplot as plt
 from pyproj import Transformer
-import plotly.graph_objects as go
-from scipy.interpolate import splprep, splev
-from sklearn.cluster import KMeans
 
-from Lane import Lane
 from EgoTrajectory import EgoTrajectory
-from LaneBoundary import LaneBoundary
+from visualizer import Visualizer
 
 
 @dataclass
@@ -52,8 +46,10 @@ def load_data() -> DataBundle:
     dfs_mobileye = pd.read_excel(mobileye, sheet_name=None)
     return DataBundle(df_car=df_car, df_radar=df_radar, dfs_mobileye=dfs_mobileye)
 
+
 def euclidean_distance(start: Tuple[float, float], end: Tuple[float, float]) -> float:
     return math.sqrt((end[0] - start[0]) ** 2 + (end[1] - start[1]) ** 2)
+
 
 def extract_lane_boundaries(ego_traj: EgoTrajectory, df: pd.DataFrame):
     """
@@ -130,6 +126,24 @@ def extract_lane_boundaries(ego_traj: EgoTrajectory, df: pd.DataFrame):
     return left_interp, right_interp
 
 
+def extract_all_lane_boundaries(data_bundle: DataBundle, ego_traj: EgoTrajectory):
+    lane_boundaries = []
+    df_lka = data_bundle.dfs_mobileye['LKA']
+    left, right = extract_lane_boundaries(ego_traj, df_lka)
+    lane_boundaries.append(left)
+    lane_boundaries.append(right)
+    try:
+        df_nl = data_bundle.dfs_mobileye['NL']
+    except KeyError:
+        df_nl = data_bundle.dfs_mobileye['Next Lane']
+    if df_nl is None:
+        raise ValueError('cannot find sheet "NL" or "Next Lane" in mobileye.xlsx')
+    left, right = extract_lane_boundaries(ego_traj, df_nl)
+    lane_boundaries.append(left)
+    lane_boundaries.append(right)
+    return lane_boundaries
+
+
 def extract_ego_trajectory(df: pd.DataFrame) -> EgoTrajectory:
     """
     Extract Information from sheet 'Car' using gps_time
@@ -186,55 +200,14 @@ def process_gps_time(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def add_trace(fig: go.Figure, trajectory: List[Tuple[int, int]], name):
-    """
-    使用 Plotly 可视化车辆轨迹
-    :param name: name for the trace
-    :param fig: go.Figure
-    :param trajectory: List of (x,y) co-ordinates
-    """
-
-
-    # 1) 绘制车辆轨迹
-    x_vals = [pt[0] for pt in trajectory]
-    y_vals = [pt[1] for pt in trajectory]
-    fig.add_trace(go.Scatter(
-        x=x_vals,
-        y=y_vals,
-        mode='lines+markers',
-        name=name,
-        line=dict(color='black'),
-        marker=dict(size=4, color='red')
-    ))
-
-
 def main():
     data_bundle = load_data()
-    # print(data_bundle.df_car.columns)
-    # print(data_bundle.df_radar.columns)
-    # print(data_bundle.dfs_mobileye.keys())
 
     ego_traj = extract_ego_trajectory(data_bundle.df_car)
-    df_lka = data_bundle.dfs_mobileye['LKA']
-    left0, right0 = extract_lane_boundaries(ego_traj, df_lka)
+    lane_boundaries = extract_all_lane_boundaries(data_bundle, ego_traj)
 
-    df_nl = None
-    try:
-        df_nl = data_bundle.dfs_mobileye['NL']
-    except KeyError:
-        df_nl = data_bundle.dfs_mobileye['Next Lane']
-    if df_nl is None:
-        raise ValueError('cannot find sheet "NL" or "Next Lane" in mobileye.xlsx')
-    left, right = extract_lane_boundaries(ego_traj, df_nl)
-    points = np.vstack((left0, right0, left, right))
-
-    fig = go.Figure()
-    add_trace(fig, left0, name='left0')
-    add_trace(fig, right0, name='right0')
-    add_trace(fig, ego_traj.positions, name='ego')
-    add_trace(fig, left, name='left')
-    add_trace(fig, right, name='right')
-    fig.show()
+    visualizer = Visualizer(ego_traj, lane_boundaries)
+    visualizer.visualize()
 
 
 if __name__ == '__main__':
