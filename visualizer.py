@@ -8,8 +8,9 @@ from matplotlib.patches import Polygon
 from EgoTrajectory import EgoTrajectory
 
 class Visualizer:
-    def __init__(self, ego_traj: EgoTrajectory, lane_boundaries: List):
+    def __init__(self, ego_traj: EgoTrajectory, other_trajectories: List, lane_boundaries: List):
         self.ego_traj = ego_traj
+        self.other_trajectories = other_trajectories
         self.lane_boundaries = lane_boundaries
 
     def get_ego_rectangle(self, ego_pos, heading, car_length=4.5, car_width=2.0):
@@ -29,6 +30,19 @@ class Visualizer:
 
         # Return polygon corners in order (to draw a closed rectangle)
         return np.array([front_left, front_right, back_right, back_left])
+
+    def get_vehicle_rectangle(self, veh_pos, heading, length:float, width:float):
+        veh_pos = np.array(veh_pos)
+        half_length = length / 2.0
+        half_width = width / 2.0
+        v = np.array([np.cos(heading), np.sin(heading)])
+        v_perp = np.array([-np.sin(heading), np.cos(heading)])
+        top_left = veh_pos + half_length * v - half_width * v_perp
+        top_right = veh_pos + half_length * v + half_width * v_perp
+        bottom_right = veh_pos - half_length * v + half_width * v_perp
+        bottom_left = veh_pos - half_length * v - half_width * v_perp
+
+        return np.array([top_left, top_right, bottom_right, bottom_left])
 
     def transform_to_local(self, points, ego_position, offset=np.array([10, 0])):
         """
@@ -51,7 +65,7 @@ class Visualizer:
         :param video_filename: Output video file name.
         """
         fig, ax = plt.subplots(figsize=(8, 6))
-        ax.set_xlim(0, 80)  # x: 0 to 80 (length of view)
+        ax.set_xlim(0, 120)  # x: 0 to 80 (length of view)
         ax.set_ylim(-15, 15)  # y: -15 to 15 (width of view)
         ax.set_aspect('equal')
         ax.set_title('Ego Trajectory and Lane Boundaries')
@@ -65,6 +79,14 @@ class Visualizer:
         # Create a patch for the ego car (as a rectangle)
         ego_patch = Polygon([[0, 0]], closed=True, fc='blue', ec='black', alpha=0.7)
         ax.add_patch(ego_patch)
+
+        # For other vehicles, create a patch for each (drawn in red).
+        vehicle_patches = []
+        if self.other_trajectories:
+            for veh in self.other_trajectories:
+                patch = Polygon([[0, 0]], closed=True, fc='red', ec='black', alpha=0.7)
+                ax.add_patch(patch)
+                vehicle_patches.append((veh, patch))
 
         # Text display for the current simulation time
         time_text = ax.text(0.02, 0.95, '', transform=ax.transAxes)
@@ -81,42 +103,56 @@ class Visualizer:
                 line.set_data([], [])
             ego_patch.set_xy([[0, 0]])
             time_text.set_text('')
-            return lane_lines + [ego_patch, time_text]
+            for veh, patch in vehicle_patches:
+                patch.set_xy([[0, 0]])
+            return lane_lines + [ego_patch, time_text] + [p for _, p in vehicle_patches]
 
         def animate(i):
             target_time = frame_times[i]
+            # Update ego state.
             state = ego_traj.interpolate(target_time)
             if state is None:
-                return lane_lines + [ego_patch, time_text]
+                return lane_lines + [ego_patch, time_text] + [p for _, p in vehicle_patches]
 
-            # Unpack interpolated state: (x, y, speed, heading)
             x, y, speed, heading = state
             ego_pos = (x, y)
 
-            # Update lane boundaries in an ego-centric view
+            # Update lane boundaries (transformed into ego-centric coordinates).
             for j, polyline in enumerate(lane_boundaries):
                 polyline = np.array(polyline)
                 local_polyline = self.transform_to_local(polyline, ego_pos, offset=view_offset)
                 lane_lines[j].set_data(local_polyline[:, 0], local_polyline[:, 1])
 
-            # Update the ego car rectangle based on its interpolated state
+            # Update ego vehicle rectangle.
             rect_global = self.get_ego_rectangle(ego_pos, heading)
             rect_local = self.transform_to_local(rect_global, ego_pos, offset=view_offset)
             ego_patch.set_xy(rect_local)
 
+            # Update other vehicles.
+            for veh, patch in vehicle_patches:
+                veh_state = veh.interpolate(target_time)
+                if veh_state is not None:
+                    patch.set_visible(True)
+                    vx, vy, veh_heading = veh_state
+                    veh_pos = (vx, vy)
+                    rect = self.get_vehicle_rectangle(veh_pos, veh_heading, veh.length, veh.width)
+                    # Transform vehicle rectangle relative to ego's position.
+                    rect_local = self.transform_to_local(rect, ego_pos, offset=view_offset)
+                    patch.set_xy(rect_local)
+                else:
+                    patch.set_visible(False)
+
             time_text.set_text(f"Time: {target_time:.2f} s")
 
-            return lane_lines + [ego_patch, time_text]
+            return lane_lines + [ego_patch, time_text] + [p for _, p in vehicle_patches]
 
-        # Create animation without using sleep, based solely on interpolated frames
         ani = animation.FuncAnimation(fig, animate, frames=num_frames,
-                                      init_func=init, blit=True, interval=1000 / fps)
+                                      init_func=init, blit=False, interval=1000 / fps)
 
-        # Save the animation to video (using FFmpeg if available, otherwise a GIF writer)
+        # Save the video.
         Writer = animation.writers['ffmpeg'] if 'ffmpeg' in animation.writers.list() else animation.PillowWriter
         writer = Writer(fps=fps)
         ani.save(video_filename, writer=writer)
-        plt.close(fig)
         print(f"Video saved as {video_filename}")
 
     def visualize(self):

@@ -7,6 +7,7 @@ import pandas as pd
 from pyproj import Transformer
 
 from EgoTrajectory import EgoTrajectory
+from VehicleTrajectory import VehicleTrajectory
 from visualizer import Visualizer
 
 
@@ -144,6 +145,67 @@ def extract_all_lane_boundaries(data_bundle: DataBundle, ego_traj: EgoTrajectory
     return lane_boundaries
 
 
+def extract_other_vehicle_trajectory(data_bundle: DataBundle, ego_traj: EgoTrajectory):
+    """
+    extract_other_vehicle_trajectory
+    :param data_bundle: extract df_obstacle from '.mobileye.xlsx'
+    :param ego_traj: EgoTrajectory for reference
+    :return:
+    """
+    def generate_new_id(existing_dict):
+        new_id = max(existing_dict.keys(), default=0) + 1
+        return new_id
+
+    df = data_bundle.dfs_mobileye['Obstacle']
+    id_to_traj = {}
+    for i in range(len(ego_traj.positions)):
+        frame_id_start = ego_traj.start_frames[i]
+        frame_id_end = ego_traj.start_frames[i+1]
+        frame_id = frame_id_start
+        theta = ego_traj.headings[i]
+        while frame_id < frame_id_end:
+            rows = df.loc[df['FrameID'] == frame_id]
+            cols = ['Obstacle_ID', 'Obstacle_Pos_X', 'Obstacle_Pos_Y', 'Obstacle_Width', 'Obstacle_Length']
+            if rows[cols].notna().all().all():
+                break
+            frame_id += 1
+        if frame_id == frame_id_end:
+            continue
+        rows = df.loc[df['FrameID'] == frame_id]
+        for _, row in rows.iterrows():
+            obs_id = row['Obstacle_ID']
+            if obs_id not in id_to_traj:
+                traj = VehicleTrajectory(obs_id)
+                print(f'Creating new object, id={obs_id}')
+                traj.set_bounding_box(row['Obstacle_Length'], row['Obstacle_Width'])
+                id_to_traj[obs_id] = traj
+            obs_traj = id_to_traj[obs_id]
+            pos = np.array([ego_traj.positions[i][0], ego_traj.positions[i][1]])
+            rel_x = row['Obstacle_Pos_X'] # always > 0
+            rel_y = row['Obstacle_Pos_Y']
+            v = np.array([np.cos(theta), np.sin(theta)])
+            pos += rel_x * v
+            v_perp = np.array([-np.sin(theta), np.cos(theta)])
+            pos += rel_y * v_perp
+            if obs_traj.timestamps and ego_traj.timestamps[i] - obs_traj.timestamps[-1] > 4:
+                # it is a new obstacle
+                new_id = generate_new_id(id_to_traj)
+                id_to_traj[new_id] = obs_traj
+                print(f'moving old id={obs_id} to id={new_id}')
+                traj = VehicleTrajectory(obs_id)
+                print(f'Creating new object, id={obs_id}')
+                traj.set_bounding_box(row['Obstacle_Length'], row['Obstacle_Width'])
+                id_to_traj[obs_id] = traj
+                obs_traj = traj
+            obs_traj.add_point(ego_traj.timestamps[i], pos[0], pos[1])
+    trajectories = []
+    for traj in id_to_traj.values(): # filter obstacles
+        if len(traj.positions) >= 2:
+            traj.compute_heading()
+            trajectories.append(traj)
+    return trajectories
+
+
 def extract_ego_trajectory(df: pd.DataFrame) -> EgoTrajectory:
     """
     Extract Information from sheet 'Car' using gps_time
@@ -205,8 +267,12 @@ def main():
 
     ego_traj = extract_ego_trajectory(data_bundle.df_car)
     lane_boundaries = extract_all_lane_boundaries(data_bundle, ego_traj)
+    other_vehicle_trajectory = extract_other_vehicle_trajectory(data_bundle, ego_traj)
+    print(other_vehicle_trajectory)
+    for traj in other_vehicle_trajectory:
+        print(traj.timestamps)
 
-    visualizer = Visualizer(ego_traj, lane_boundaries)
+    visualizer = Visualizer(ego_traj, other_vehicle_trajectory, lane_boundaries)
     visualizer.visualize()
 
 
